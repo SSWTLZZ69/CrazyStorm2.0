@@ -6,6 +6,7 @@ using CrazyStorm.Core;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -195,6 +196,18 @@ namespace CrazyStorm.McpServer
                         { "overwrite", BoolProperty("Set true to overwrite outputPath when it already exists.") }
                     },
                     new[] { "path", "component", "name", "events" },
+                    WriteAnnotations()),
+
+                Tool(
+                    "crazy_storm_open_editor",
+                    "Launch the CrazyStorm 2.0 editor UI, optionally opening a .bgp/.mbg project file.",
+                    new Dictionary<string, object>
+                    {
+                        { "path", StringProperty("Optional project file path to open in the editor.") },
+                        { "editorPath", StringProperty("Optional CrazyStorm.exe path. Defaults to the sibling editor build output.") },
+                        { "workingDirectory", StringProperty("Optional editor working directory. Defaults to the editor executable directory.") }
+                    },
+                    new string[0],
                     WriteAnnotations())
             };
         }
@@ -231,6 +244,9 @@ namespace CrazyStorm.McpServer
 
                     case "crazy_storm_add_event_group":
                         return TextResult(ToJson(AddEventGroup(arguments)));
+
+                    case "crazy_storm_open_editor":
+                        return TextResult(ToJson(OpenEditor(arguments)));
 
                     default:
                         return ErrorResult("Unknown tool: " + name);
@@ -461,6 +477,48 @@ namespace CrazyStorm.McpServer
             }
 
             return SaveAndSummarize(edit.Project, edit.OutputPath, "eventGroupAdded", group.Name);
+        }
+
+        private Dictionary<string, object> OpenEditor(Dictionary<string, object> arguments)
+        {
+            string editorPath = McpProtocol.GetString(arguments, "editorPath");
+            if (string.IsNullOrWhiteSpace(editorPath)) editorPath = ResolveDefaultEditorPath();
+            editorPath = ResolvePath(editorPath);
+
+            if (!IoFile.Exists(editorPath))
+                throw new FileNotFoundException("CrazyStorm editor executable not found. Build CrazyStorm2.0 first or pass editorPath.", editorPath);
+
+            string projectPath = McpProtocol.GetString(arguments, "path");
+            if (!string.IsNullOrWhiteSpace(projectPath))
+            {
+                projectPath = ResolvePath(projectPath);
+                if (!IoFile.Exists(projectPath)) throw new FileNotFoundException("Project file not found.", projectPath);
+            }
+
+            string workingDirectory = McpProtocol.GetString(arguments, "workingDirectory");
+            if (string.IsNullOrWhiteSpace(workingDirectory)) workingDirectory = Path.GetDirectoryName(editorPath);
+            else workingDirectory = ResolvePath(workingDirectory);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = editorPath,
+                WorkingDirectory = workingDirectory,
+                UseShellExecute = false
+            };
+            if (!string.IsNullOrWhiteSpace(projectPath))
+                startInfo.Arguments = QuoteArgument(projectPath);
+
+            var process = Process.Start(startInfo);
+            if (process == null) throw new InvalidOperationException("Failed to launch CrazyStorm editor.");
+
+            return new Dictionary<string, object>
+            {
+                { "editorPath", editorPath },
+                { "projectPath", projectPath },
+                { "workingDirectory", workingDirectory },
+                { "processId", process.Id },
+                { "started", true }
+            };
         }
 
         private EditableProject LoadEditableProject(Dictionary<string, object> arguments)
@@ -840,6 +898,29 @@ namespace CrazyStorm.McpServer
             }
 
             return Path.GetFullPath(Environment.ExpandEnvironmentVariables(outputPath));
+        }
+
+        private static string ResolveDefaultEditorPath()
+        {
+            string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            var directory = new DirectoryInfo(baseDirectory);
+            while (directory != null)
+            {
+                string candidate = Path.Combine(directory.FullName, "bin", "Debug", "CrazyStorm.exe");
+                if (IoFile.Exists(candidate)) return candidate;
+
+                candidate = Path.Combine(directory.FullName, "bin", "Release", "CrazyStorm.exe");
+                if (IoFile.Exists(candidate)) return candidate;
+
+                directory = directory.Parent;
+            }
+
+            return Path.Combine(baseDirectory, "CrazyStorm.exe");
+        }
+
+        private static string QuoteArgument(string value)
+        {
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
 
         private static string GetRequiredPath(Dictionary<string, object> arguments)
