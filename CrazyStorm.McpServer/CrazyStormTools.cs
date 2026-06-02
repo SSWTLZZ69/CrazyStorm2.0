@@ -8,8 +8,10 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Web.Script.Serialization;
 using System.Xml;
 using CsFile = CrazyStorm.Core.File;
@@ -90,7 +92,9 @@ namespace CrazyStorm.McpServer
                         { "centerX", NumberProperty("Optional Center X position. Defaults to 0.") },
                         { "centerY", NumberProperty("Optional Center Y position. Defaults to 0.") },
                         { "includeCenter", BoolProperty("When true, add a default Center component. Defaults to true.") },
-                        { "overwrite", BoolProperty("Set true to overwrite an existing output file.") }
+                        { "overwrite", BoolProperty("Set true to overwrite an existing output file.") },
+                        { "reloadInRunningEditor", BoolProperty("When true, ask an already-open CrazyStorm 2.0 editor window to open or reload the saved project.") },
+                        { "editorTimeoutMs", NumberProperty("Running-editor IPC timeout in milliseconds. Defaults to 2000.") }
                     },
                     new[] { "path" },
                     new Dictionary<string, object>
@@ -112,7 +116,9 @@ namespace CrazyStorm.McpServer
                         { "totalFrame", NumberProperty("Layer length in frames. Defaults to 300.") },
                         { "color", StringProperty("Layer color name: Blue, Purple, Red, Green, Yellow, Orange, Pink.") },
                         { "visible", BoolProperty("Layer visibility. Defaults to true.") },
-                        { "overwrite", BoolProperty("Set true to overwrite outputPath when it already exists.") }
+                        { "overwrite", BoolProperty("Set true to overwrite outputPath when it already exists.") },
+                        { "reloadInRunningEditor", BoolProperty("When true, ask an already-open CrazyStorm 2.0 editor window to open or reload the saved project.") },
+                        { "editorTimeoutMs", NumberProperty("Running-editor IPC timeout in milliseconds. Defaults to 2000.") }
                     },
                     new[] { "path", "name" },
                     WriteAnnotations()),
@@ -151,7 +157,9 @@ namespace CrazyStorm.McpServer
                         { "particleB", NumberProperty("Particle blue channel. Defaults to 255.") },
                         { "collision", BoolProperty("Whether emitted particles collide with player. Defaults to true.") },
                         { "blendType", StringProperty("Particle blend type: AlphaBlend, Additive, Substraction, Multiply, None.") },
-                        { "overwrite", BoolProperty("Set true to overwrite outputPath when it already exists.") }
+                        { "overwrite", BoolProperty("Set true to overwrite outputPath when it already exists.") },
+                        { "reloadInRunningEditor", BoolProperty("When true, ask an already-open CrazyStorm 2.0 editor window to open or reload the saved project.") },
+                        { "editorTimeoutMs", NumberProperty("Running-editor IPC timeout in milliseconds. Defaults to 2000.") }
                     },
                     new[] { "path", "name" },
                     WriteAnnotations()),
@@ -174,7 +182,9 @@ namespace CrazyStorm.McpServer
                             }
                         },
                         { "expression", BoolProperty("When true, store value as a CrazyStorm expression instead of setting the runtime field.") },
-                        { "overwrite", BoolProperty("Set true to overwrite outputPath when it already exists.") }
+                        { "overwrite", BoolProperty("Set true to overwrite outputPath when it already exists.") },
+                        { "reloadInRunningEditor", BoolProperty("When true, ask an already-open CrazyStorm 2.0 editor window to open or reload the saved project.") },
+                        { "editorTimeoutMs", NumberProperty("Running-editor IPC timeout in milliseconds. Defaults to 2000.") }
                     },
                     new[] { "path", "component", "property", "value" },
                     WriteAnnotations()),
@@ -193,7 +203,9 @@ namespace CrazyStorm.McpServer
                         { "name", StringProperty("Event group name.") },
                         { "condition", StringProperty("CrazyStorm expression condition, for example CurrentFrame=1.") },
                         { "events", ArrayProperty("Event strings to append to the group.") },
-                        { "overwrite", BoolProperty("Set true to overwrite outputPath when it already exists.") }
+                        { "overwrite", BoolProperty("Set true to overwrite outputPath when it already exists.") },
+                        { "reloadInRunningEditor", BoolProperty("When true, ask an already-open CrazyStorm 2.0 editor window to open or reload the saved project.") },
+                        { "editorTimeoutMs", NumberProperty("Running-editor IPC timeout in milliseconds. Defaults to 2000.") }
                     },
                     new[] { "path", "component", "name", "events" },
                     WriteAnnotations()),
@@ -206,6 +218,27 @@ namespace CrazyStorm.McpServer
                         { "path", StringProperty("Optional project file path to open in the editor.") },
                         { "editorPath", StringProperty("Optional CrazyStorm.exe path. Defaults to the sibling editor build output.") },
                         { "workingDirectory", StringProperty("Optional editor working directory. Defaults to the editor executable directory.") }
+                    },
+                    new string[0],
+                    WriteAnnotations()),
+
+                Tool(
+                    "crazy_storm_open_in_running_editor",
+                    "Ask an already-open CrazyStorm 2.0 editor window to open or reload a project file through local IPC.",
+                    new Dictionary<string, object>
+                    {
+                        { "path", StringProperty("Project file path to open in the running editor window.") },
+                        { "timeoutMs", NumberProperty("Pipe connection timeout in milliseconds. Defaults to 2000.") }
+                    },
+                    new[] { "path" },
+                    WriteAnnotations()),
+
+                Tool(
+                    "crazy_storm_ping_running_editor",
+                    "Check whether an already-open CrazyStorm 2.0 editor window is listening for MCP commands.",
+                    new Dictionary<string, object>
+                    {
+                        { "timeoutMs", NumberProperty("Pipe connection timeout in milliseconds. Defaults to 2000.") }
                     },
                     new string[0],
                     WriteAnnotations())
@@ -247,6 +280,12 @@ namespace CrazyStorm.McpServer
 
                     case "crazy_storm_open_editor":
                         return TextResult(ToJson(OpenEditor(arguments)));
+
+                    case "crazy_storm_open_in_running_editor":
+                        return TextResult(ToJson(OpenInRunningEditor(arguments)));
+
+                    case "crazy_storm_ping_running_editor":
+                        return TextResult(ToJson(PingRunningEditor(arguments)));
 
                     default:
                         return ErrorResult("Unknown tool: " + name);
@@ -342,6 +381,7 @@ namespace CrazyStorm.McpServer
             var loaded = LoadProject(path);
             var summary = BuildSummary(loaded);
             summary["created"] = true;
+            AttachRunningEditorReload(summary, path, arguments);
             return summary;
         }
 
@@ -361,7 +401,7 @@ namespace CrazyStorm.McpServer
                 layer.Color = ParseEnum<LayerColor>(color);
 
             system.AddLayer(layer);
-            return SaveAndSummarize(edit.Project, edit.OutputPath, "layerAdded", layer.Name);
+            return SaveAndSummarize(edit.Project, edit.OutputPath, "layerAdded", layer.Name, arguments);
         }
 
         private Dictionary<string, object> AddMultiEmitter(Dictionary<string, object> arguments)
@@ -415,7 +455,7 @@ namespace CrazyStorm.McpServer
             }
 
             system.AddComponentToLayer(layer, emitter);
-            return SaveAndSummarize(edit.Project, edit.OutputPath, "componentAdded", emitter.Name);
+            return SaveAndSummarize(edit.Project, edit.OutputPath, "componentAdded", emitter.Name, arguments);
         }
 
         private Dictionary<string, object> SetProperty(Dictionary<string, object> arguments)
@@ -445,7 +485,7 @@ namespace CrazyStorm.McpServer
                 SetRuntimeProperty(target, propertyName, rawValue);
             }
 
-            return SaveAndSummarize(edit.Project, edit.OutputPath, "propertySet", propertyName);
+            return SaveAndSummarize(edit.Project, edit.OutputPath, "propertySet", propertyName, arguments);
         }
 
         private Dictionary<string, object> AddEventGroup(Dictionary<string, object> arguments)
@@ -476,7 +516,7 @@ namespace CrazyStorm.McpServer
                 component.ComponentEventGroups.Add(group);
             }
 
-            return SaveAndSummarize(edit.Project, edit.OutputPath, "eventGroupAdded", group.Name);
+            return SaveAndSummarize(edit.Project, edit.OutputPath, "eventGroupAdded", group.Name, arguments);
         }
 
         private Dictionary<string, object> OpenEditor(Dictionary<string, object> arguments)
@@ -521,6 +561,62 @@ namespace CrazyStorm.McpServer
             };
         }
 
+        private Dictionary<string, object> OpenInRunningEditor(Dictionary<string, object> arguments)
+        {
+            string projectPath = ResolvePath(GetRequiredPath(arguments));
+            if (!IoFile.Exists(projectPath)) throw new FileNotFoundException("Project file not found.", projectPath);
+
+            int timeoutMs = GetOptionalInt(arguments, "timeoutMs", 2000);
+            string response = SendRequiredEditorCommand("open\t" + projectPath, timeoutMs);
+
+            return new Dictionary<string, object>
+            {
+                { "projectPath", projectPath },
+                { "response", response },
+                { "opened", true }
+            };
+        }
+
+        private Dictionary<string, object> PingRunningEditor(Dictionary<string, object> arguments)
+        {
+            int timeoutMs = GetOptionalInt(arguments, "timeoutMs", 2000);
+            string response = SendRequiredEditorCommand("ping", timeoutMs);
+            return new Dictionary<string, object>
+            {
+                { "response", response },
+                { "running", true }
+            };
+        }
+
+        private string SendRequiredEditorCommand(string command, int timeoutMs)
+        {
+            string response = SendEditorCommand(command, timeoutMs);
+            bool ok = response.StartsWith("OK\t", StringComparison.Ordinal);
+            if (!ok) throw new InvalidOperationException(response);
+            return response;
+        }
+
+        private string SendEditorCommand(string command, int timeoutMs)
+        {
+            try
+            {
+                using (var pipe = new NamedPipeClientStream(".", "CrazyStorm2.0.Mcp", PipeDirection.InOut))
+                {
+                    pipe.Connect(timeoutMs);
+                    using (var reader = new StreamReader(pipe, Encoding.UTF8))
+                    using (var writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true })
+                    {
+                        writer.WriteLine(command);
+                        return reader.ReadLine() ?? string.Empty;
+                    }
+                }
+            }
+            catch (TimeoutException)
+            {
+                throw new TimeoutException("No running CrazyStorm 2.0 editor window responded. Open the editor first with crazy_storm_open_editor or start CrazyStorm.exe manually.");
+            }
+        }
+
         private EditableProject LoadEditableProject(Dictionary<string, object> arguments)
         {
             var loaded = LoadProject(GetRequiredPath(arguments));
@@ -544,13 +640,24 @@ namespace CrazyStorm.McpServer
             };
         }
 
-        private Dictionary<string, object> SaveAndSummarize(CsFile project, string path, string action, object value)
+        private Dictionary<string, object> SaveAndSummarize(CsFile project, string path, string action, object value, Dictionary<string, object> arguments)
         {
             SaveProject(project, path);
             var loaded = LoadProject(path);
             var summary = BuildSummary(loaded);
             summary[action] = value;
+            AttachRunningEditorReload(summary, path, arguments);
             return summary;
+        }
+
+        private void AttachRunningEditorReload(Dictionary<string, object> summary, string path, Dictionary<string, object> arguments)
+        {
+            if (!McpProtocol.GetBool(arguments, "reloadInRunningEditor", false)) return;
+
+            int timeoutMs = GetOptionalInt(arguments, "editorTimeoutMs", 2000);
+            string response = SendRequiredEditorCommand("open\t" + path, timeoutMs);
+            summary["runningEditorReloaded"] = true;
+            summary["runningEditorResponse"] = response;
         }
 
         private void SaveProject(CsFile project, string path)

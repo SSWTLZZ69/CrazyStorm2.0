@@ -146,6 +146,8 @@ namespace CrazyStorm
         private void Window_Closing(object sender, CancelEventArgs e)
         {
             e.Cancel = !SaveTip();
+            if (!e.Cancel)
+                editorIpcServer?.Dispose();
         }
         #endregion
     }

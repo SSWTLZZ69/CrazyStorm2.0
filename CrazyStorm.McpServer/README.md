@@ -6,6 +6,12 @@ The MCP server itself is headless. It is launched in the background by MCP clien
 To show the real CrazyStorm UI, use `crazy_storm_open_editor`, which launches
 `CrazyStorm.exe` and optionally opens a project file.
 
+When the editor is already open, the editor process listens on a local named pipe.
+Use `crazy_storm_ping_running_editor` to check that the window is reachable, or
+`crazy_storm_open_in_running_editor` to ask the running window to open/reload a project.
+Editing tools can also pass `reloadInRunningEditor=true` so the open editor refreshes
+immediately after the `.bgp` file is saved.
+
 ## Build
 
 Build the solution or just this project:
@@ -13,6 +19,16 @@ Build the solution or just this project:
 ```powershell
 dotnet msbuild .\CrazyStorm.McpServer\CrazyStorm.McpServer.csproj /p:Configuration=Debug /p:Platform=AnyCPU
 ```
+
+To build the editor for local MCP window testing on a machine without the shader
+compiler or Sphinx documentation dependencies, use:
+
+```powershell
+dotnet msbuild .\CrazyStorm2.0.csproj /p:Configuration=Debug /p:Platform=AnyCPU /p:SkipShaderCompile=true /p:BuildDocs=false
+```
+
+Normal editor/player builds still expect the MonoGame shader compiler to generate
+`shader.mgfxo`.
 
 ## Client configuration
 
@@ -45,8 +61,12 @@ Use the built executable as a stdio MCP server:
 - `crazy_storm_set_property`: sets a component or particle-template property by name. It supports runtime values and expression-backed properties.
 - `crazy_storm_add_event_group`: adds raw CS2 event-group text to a component or emitter particle template.
 - `crazy_storm_open_editor`: launches the CrazyStorm 2.0 editor window, optionally opening a `.bgp` or `.mbg` file.
+- `crazy_storm_ping_running_editor`: checks whether an open CrazyStorm 2.0 editor window is accepting MCP commands.
+- `crazy_storm_open_in_running_editor`: opens or reloads a project in an already-running editor window.
 
 Editing tools load a project, modify it through `CrazyStorm.Core`, save it, then return a fresh summary. Legacy `.mbg` inputs require `outputPath` so the original CS1 text file is not overwritten by CS2 XML.
+Set `reloadInRunningEditor=true` on create/edit tools to save through MCP and then
+refresh the already-open editor window through local IPC.
 
 `crazy_storm_open_editor` needs a built `CrazyStorm.exe`. By default it looks for the editor build output next to this repository. If you use a release package or a custom build location, pass `editorPath`.
 
@@ -59,6 +79,8 @@ crazy_storm_set_property(path="pattern.bgp", component="BlueBurst", target="part
 crazy_storm_validate_project(path="pattern.bgp", compile=true)
 crazy_storm_export_play_data(path="pattern.bgp", outputPath="pattern.bg")
 crazy_storm_open_editor(path="pattern.bgp")
+crazy_storm_ping_running_editor()
+crazy_storm_add_multi_emitter(path="pattern.bgp", name="PinkRing", emitCount=24, reloadInRunningEditor=true)
 ```
 
 `crazy_storm_add_event_group` expects event strings in the current CS2 serialized event format. Use validation with `compile=true` after adding events.

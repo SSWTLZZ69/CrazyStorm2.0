@@ -33,7 +33,7 @@ namespace CrazyStorm_Player
             var typeLibraryPath = Environment.GetCommandLineArgs()[12];
             var frameOrientation = int.Parse(Environment.GetCommandLineArgs()[13]);
 
-            playerImpl = new PlayerImpl($"typelibrary\\{typeLibraryPath}", width, height, frameRate, 
+            playerImpl = new PlayerImpl(BuildTypeLibraryPath(typeLibraryPath), width, height, frameRate,
                 particleMaximum, curveParticleMaximum);
             playerImpl.FrameOrientation = (FrameOrientation)frameOrientation;
             playerImpl.BackgroundPath = backgroundPath;
@@ -62,6 +62,12 @@ namespace CrazyStorm_Player
         protected override void LoadContent()
         {
             playerImpl.Initialize(GraphicsDevice);
+        }
+        string BuildTypeLibraryPath(string typeLibraryPath)
+        {
+            return string.IsNullOrWhiteSpace(typeLibraryPath)
+                ? string.Empty
+                : System.IO.Path.Combine("typelibrary", typeLibraryPath);
         }
         protected override void Update(GameTime gameTime)
         {

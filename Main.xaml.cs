@@ -30,6 +30,7 @@ namespace CrazyStorm
         File file;
         Dictionary<ParticleSystem, CommandStack> commandStacks;
         List<Core.Component> clipBoard;
+        EditorIpcServer editorIpcServer;
         #endregion
 
         #region Constructor
@@ -142,8 +143,16 @@ namespace CrazyStorm
         public void Initailize()
         {
             InitializeConfig();
-            ParticleType.LoadDefaultTypes($"typelibrary\\{config.TypeLibraryPath}");
+            ParticleType.LoadDefaultTypes(GetTypeLibraryPath());
             ChangeTheme(config.Theme);
+            editorIpcServer = new EditorIpcServer(this);
+            editorIpcServer.Start();
+        }
+        public string GetTypeLibraryPath()
+        {
+            return string.IsNullOrWhiteSpace(config.TypeLibraryPath)
+                ? string.Empty
+                : System.IO.Path.Combine("typelibrary", config.TypeLibraryPath);
         }
         public void StartNewFile()
         {
@@ -153,6 +162,15 @@ namespace CrazyStorm
         public void OpenFile(string openPath)
         {
             Open(openPath);
+        }
+        public bool TryOpenFile(string openPath)
+        {
+            if (HasUnsavedChanges) return false;
+            return Open(openPath);
+        }
+        public bool HasUnsavedChanges
+        {
+            get { return !saved; }
         }
         #endregion
 

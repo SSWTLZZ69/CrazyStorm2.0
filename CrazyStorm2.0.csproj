@@ -193,6 +193,7 @@
     <Compile Include="Edit\Command\Property\SetPropertyCommand.cs" />
     <Compile Include="Helper\VisualHelper.cs" />
     <Compile Include="EmbeddedPlayer.cs" />
+    <Compile Include="EditorIpcServer.cs" />
     <Compile Include="Panel\TypeSoundPanel.xaml.cs">
       <DependentUpon>TypeSoundPanel.xaml</DependentUpon>
     </Compile>
@@ -435,14 +436,14 @@
   <Target Name="EnsureLibraryFolder" BeforeTargets="Build">
     <MakeDir Directories="$(TargetDir)typelibrary" Condition="!Exists('$(TargetDir)typelibrary')" />
   </Target>
-  <Target Name="CleanDocs" BeforeTargets="Clean" Condition="'$(DesignTimeBuild)' != 'true' and Exists('$(MSBuildProjectDirectory)\Docs\build.ps1')">
+  <Target Name="CleanDocs" BeforeTargets="Clean" Condition="'$(DesignTimeBuild)' != 'true' and '$(BuildDocs)' != 'false' and Exists('$(MSBuildProjectDirectory)\Docs\build.ps1')">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Docs\build.ps1&quot; -CleanOnly" WorkingDirectory="$(MSBuildProjectDirectory)\Docs" />
     <RemoveDir Directories="$(TargetDir)Docs" Condition="Exists('$(TargetDir)Docs')" />
   </Target>
-  <Target Name="BuildDocs" BeforeTargets="Build" Condition="'$(DesignTimeBuild)' != 'true' and Exists('$(MSBuildProjectDirectory)\Docs\build.ps1')">
+  <Target Name="BuildDocs" BeforeTargets="Build" Condition="'$(DesignTimeBuild)' != 'true' and '$(BuildDocs)' != 'false' and Exists('$(MSBuildProjectDirectory)\Docs\build.ps1')">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Docs\build.ps1&quot;" WorkingDirectory="$(MSBuildProjectDirectory)\Docs" />
   </Target>
-  <Target Name="CopyDocsToOutput" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true' and Exists('$(MSBuildProjectDirectory)\Docs')">
+  <Target Name="CopyDocsToOutput" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true' and '$(BuildDocs)' != 'false' and Exists('$(MSBuildProjectDirectory)\Docs')">
     <ItemGroup>
       <_DocsToCopy Include="$(MSBuildProjectDirectory)\Docs\**\*.*" Exclude="$(MSBuildProjectDirectory)\Docs\source\**\*.*;$(MSBuildProjectDirectory)\Docs\build.ps1;$(MSBuildProjectDirectory)\Docs\README.md" />
     </ItemGroup>
