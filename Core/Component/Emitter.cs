@@ -173,7 +173,7 @@ namespace CrazyStorm.Core
                 newParticle.ParticleEventGroups = EmitterEventGroups;
                 Particles.Add(newParticle);
             }
-            if (System.Sounds != null && System.TypeSoundMap != null && System.TypeSoundMap.ContainsKey(Template.Type.ID))
+            if (Template.Type != null && System.Sounds != null && System.TypeSoundMap != null && System.TypeSoundMap.ContainsKey(Template.Type.ID))
             {
                 var sound = System.Sounds.FirstOrDefault((item) => item.ID == System.TypeSoundMap[Template.Type.ID]);
                 if (sound != null) EventManager.PlaySound(sound);

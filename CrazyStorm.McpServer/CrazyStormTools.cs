@@ -7,6 +7,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
@@ -79,6 +80,27 @@ namespace CrazyStorm.McpServer
                     "List component types available in CrazyStorm.Core.",
                     new Dictionary<string, object>(),
                     new string[0]),
+
+                Tool(
+                    "crazy_storm_debug_frames",
+                    "Replay a CrazyStorm project to selected frames and return runtime particle statistics and sample bullets.",
+                    new Dictionary<string, object>
+                    {
+                        { "path", StringProperty("Project file path. Relative paths resolve from the MCP server working directory.") },
+                        { "frames", NumberArrayProperty("Frame numbers to sample, for example [60, 120, 180].") },
+                        { "particleSystem", StringProperty("Particle system name or index. Defaults to all systems.") },
+                        { "frameRate", NumberProperty("Simulation frame rate. Defaults to 60.") },
+                        { "screenWidth", NumberProperty("Runtime screen width used for outside-window culling. Defaults to 640.") },
+                        { "screenHeight", NumberProperty("Runtime screen height used for outside-window culling. Defaults to 480.") },
+                        { "particleMaximum", NumberProperty("Maximum straight particles in the runtime pool. Defaults to 10000.") },
+                        { "curveParticleMaximum", NumberProperty("Maximum curve particles in the runtime pool. Defaults to 1000.") },
+                        { "maxSamples", NumberProperty("Maximum particle samples to return per frame. Defaults to 25.") },
+                        { "typeLibraryPath", StringProperty("Optional default particle type library path. Empty uses CrazyStorm.Core embedded defaults.") },
+                        { "playerX", NumberProperty("Optional player X position for collision counting.") },
+                        { "playerY", NumberProperty("Optional player Y position for collision counting.") },
+                        { "playerRadius", NumberProperty("Player collision radius when playerX/playerY are supplied. Defaults to 3.") }
+                    },
+                    new[] { "path", "frames" }),
 
                 Tool(
                     "crazy_storm_create_project",
@@ -263,6 +285,9 @@ namespace CrazyStorm.McpServer
                     case "crazy_storm_component_types":
                         return TextResult(ToJson(GetComponentTypes()));
 
+                    case "crazy_storm_debug_frames":
+                        return TextResult(ToJson(DebugFrames(arguments)));
+
                     case "crazy_storm_create_project":
                         return TextResult(ToJson(CreateProject(arguments)));
 
@@ -336,6 +361,207 @@ namespace CrazyStorm.McpServer
                 { "bytes", bytes.Length },
                 { "overwritten", overwrite }
             };
+        }
+
+        private Dictionary<string, object> DebugFrames(Dictionary<string, object> arguments)
+        {
+            var loaded = LoadProject(GetRequiredPath(arguments));
+            int[] frames = GetIntArray(arguments, "frames");
+            if (frames.Length == 0) throw new ArgumentException("frames is required.");
+            if (frames.Length > 100) throw new InvalidOperationException("At most 100 frames can be sampled per call.");
+
+            string systemSelector = McpProtocol.GetString(arguments, "particleSystem");
+            float frameRate = GetOptionalFloat(arguments, "frameRate", 60);
+            int screenWidth = GetOptionalInt(arguments, "screenWidth", 640);
+            int screenHeight = GetOptionalInt(arguments, "screenHeight", 480);
+            int particleMaximum = GetOptionalInt(arguments, "particleMaximum", 10000);
+            int curveParticleMaximum = GetOptionalInt(arguments, "curveParticleMaximum", 1000);
+            int maxSamples = Math.Max(0, Math.Min(500, GetOptionalInt(arguments, "maxSamples", 25)));
+            string typeLibraryPath = ResolveTypeLibraryPath(McpProtocol.GetString(arguments, "typeLibraryPath"));
+
+            bool checkCollision = arguments.ContainsKey("playerX") || arguments.ContainsKey("playerY");
+            var player = new Vector2(GetOptionalFloat(arguments, "playerX", 0), GetOptionalFloat(arguments, "playerY", 0));
+            float playerRadius = GetOptionalFloat(arguments, "playerRadius", 3);
+
+            byte[] playBytes = loaded.Project.GeneratePlayFile();
+            string resourceDirectory = Path.GetDirectoryName(loaded.Path) + Path.DirectorySeparatorChar;
+            var frameSummaries = new List<object>();
+
+            foreach (int frame in frames)
+            {
+                var runtimeProject = LoadRuntimeProject(playBytes, resourceDirectory, typeLibraryPath, screenWidth, screenHeight, particleMaximum, curveParticleMaximum);
+                var systems = GetDebugSystems(runtimeProject, systemSelector);
+
+                foreach (var system in systems)
+                    system.SkipFrame(frame, true, frameRate);
+
+                if (checkCollision)
+                {
+                    foreach (var system in systems)
+                    {
+                        ParticleManager.ClearLayerMasks();
+                        ParticleManager.UpdateLayerMasks(system.Layers);
+                    }
+                }
+
+                frameSummaries.Add(BuildFrameDebugSummary(frame, systems, checkCollision, player, playerRadius, maxSamples));
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "projectPath", loaded.Path },
+                { "format", loaded.IsLegacyCs1 ? "Crazy Storm 1.x mbg" : "Crazy Storm 2 bgp" },
+                { "frameRate", frameRate },
+                { "screenWidth", screenWidth },
+                { "screenHeight", screenHeight },
+                { "particleMaximum", particleMaximum },
+                { "curveParticleMaximum", curveParticleMaximum },
+                { "particleSystem", string.IsNullOrWhiteSpace(systemSelector) ? "all" : systemSelector },
+                { "sampleTiming", "ParticleSystem.SkipFrame replay state at the requested frame." },
+                { "frames", frameSummaries.ToArray() }
+            };
+        }
+
+        private CsFile LoadRuntimeProject(byte[] playBytes, string resourceDirectory, string typeLibraryPath,
+            int screenWidth, int screenHeight, int particleMaximum, int curveParticleMaximum)
+        {
+            ParticleType.LoadDefaultTypes(typeLibraryPath, true);
+            EventManager.Initialize();
+            ParticleManager.Initialize(screenWidth, screenHeight, 50, 100, particleMaximum, curveParticleMaximum);
+
+            var runtimeProject = new CsFile();
+            float baseVersion = float.Parse(VersionInfo.PlayVersion, CultureInfo.InvariantCulture);
+            if (!runtimeProject.LoadPlayFile(playBytes, resourceDirectory, baseVersion))
+                throw new InvalidOperationException("Generated play data could not be loaded for runtime debugging.");
+
+            return runtimeProject;
+        }
+
+        private List<ParticleSystem> GetDebugSystems(CsFile runtimeProject, string selector)
+        {
+            if (runtimeProject.ParticleSystems.Count == 0)
+                throw new InvalidOperationException("Project has no particle systems.");
+
+            if (string.IsNullOrWhiteSpace(selector))
+                return runtimeProject.ParticleSystems.ToList();
+
+            return new List<ParticleSystem> { FindParticleSystem(runtimeProject, selector) };
+        }
+
+        private Dictionary<string, object> BuildFrameDebugSummary(int requestedFrame, List<ParticleSystem> systems,
+            bool checkCollision, Vector2 player, float playerRadius, int maxSamples)
+        {
+            var active = new List<ParticleBase>();
+            var systemSummaries = new List<object>();
+            foreach (var system in systems)
+            {
+                var particles = ParticleManager.GetActiveParticles(system);
+                active.AddRange(particles);
+                systemSummaries.Add(new Dictionary<string, object>
+                {
+                    { "name", system.Name },
+                    { "currentFrame", system.CurrentFrame },
+                    { "totalFrame", system.TotalFrame },
+                    { "activeParticleCount", particles.Count }
+                });
+            }
+
+            int collisionCount = 0;
+            if (checkCollision)
+            {
+                Vector2 newPlayerPos;
+                ParticleManager.CheckCollision(false, player, player, playerRadius, out collisionCount, out newPlayerPos);
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "requestedFrame", requestedFrame },
+                { "activeParticleCount", active.Count },
+                { "straightParticleCount", active.Count(item => item is Particle) },
+                { "curveParticleCount", active.Count(item => item is CurveParticle) },
+                { "collidableParticleCount", active.Count(item => item.Collision) },
+                { "maskedParticleCount", active.Count(item => item.PMasked) },
+                { "collisionChecked", checkCollision },
+                { "collisionCount", checkCollision ? (object)collisionCount : null },
+                { "bounds", BuildParticleBounds(active) },
+                { "averageSpeed", active.Count > 0 ? (object)active.Average(item => item.PSpeed) : null },
+                { "averageOpacity", active.Count > 0 ? (object)active.Average(item => item.Opacity) : null },
+                { "systems", systemSummaries.ToArray() },
+                { "samples", active.Take(maxSamples).Select(BuildParticleSample).ToArray() }
+            };
+        }
+
+        private Dictionary<string, object> BuildParticleBounds(List<ParticleBase> particles)
+        {
+            if (particles.Count == 0) return null;
+
+            return new Dictionary<string, object>
+            {
+                { "minX", particles.Min(item => item.PPosition.x) },
+                { "maxX", particles.Max(item => item.PPosition.x) },
+                { "minY", particles.Min(item => item.PPosition.y) },
+                { "maxY", particles.Max(item => item.PPosition.y) }
+            };
+        }
+
+        private Dictionary<string, object> BuildParticleSample(ParticleBase particle)
+        {
+            var layerName = string.Empty;
+            if (particle.Emitter != null &&
+                particle.Emitter.LayerID >= 0 &&
+                particle.Emitter.LayerID < particle.System.Layers.Count)
+            {
+                layerName = particle.System.Layers[particle.Emitter.LayerID].Name;
+            }
+
+            var sample = new Dictionary<string, object>
+            {
+                { "id", particle.ID },
+                { "kind", particle.GetType().Name },
+                { "system", particle.System != null ? particle.System.Name : string.Empty },
+                { "emitter", particle.Emitter != null ? particle.Emitter.Name : string.Empty },
+                { "layerIndex", particle.Emitter != null ? (object)particle.Emitter.LayerID : null },
+                { "layer", layerName },
+                { "x", particle.PPosition.x },
+                { "y", particle.PPosition.y },
+                { "lastX", particle.PPositionLast.x },
+                { "lastY", particle.PPositionLast.y },
+                { "speed", particle.PSpeed },
+                { "speedAngle", particle.PSpeedAngle },
+                { "currentFrame", particle.PCurrentFrame },
+                { "maxLife", particle.MaxLife },
+                { "widthScale", particle.WidthScale },
+                { "opacity", particle.Opacity },
+                { "r", particle.RGB.r },
+                { "g", particle.RGB.g },
+                { "b", particle.RGB.b },
+                { "collision", particle.Collision },
+                { "masked", particle.PMasked },
+                { "blendType", particle.BlendType.ToString() },
+                { "type", particle.Type != null ? particle.Type.Name : string.Empty },
+                { "typeId", particle.Type != null ? (object)particle.Type.ID : null }
+            };
+
+            var straight = particle as Particle;
+            if (straight != null)
+                sample["heightScale"] = straight.HeightScale;
+
+            return sample;
+        }
+
+        private string ResolveTypeLibraryPath(string typeLibraryPath)
+        {
+            if (string.IsNullOrWhiteSpace(typeLibraryPath)) return string.Empty;
+
+            string resolved = ResolvePath(typeLibraryPath);
+            if (!IoFile.Exists(resolved)) throw new FileNotFoundException("Type library file not found.", resolved);
+            return resolved;
+        }
+
+        private void EnsureDefaultParticleTypes()
+        {
+            if (ParticleType.DefaultTypes.Count == 0)
+                ParticleType.LoadDefaultTypes(string.Empty);
         }
 
         private Dictionary<string, object> CreateProject(Dictionary<string, object> arguments)
@@ -436,6 +662,10 @@ namespace CrazyStorm.McpServer
             var particle = emitter.InitialTemplate as Particle;
             if (particle != null)
             {
+                EnsureDefaultParticleTypes();
+                if (particle.Type == null && ParticleType.DefaultTypes.Count > 0)
+                    particle.Type = ParticleType.DefaultTypes[0];
+
                 float widthScale = GetOptionalFloat(arguments, "particleWidthScale", 1);
                 particle.MaxLife = GetOptionalInt(arguments, "particleLife", 120);
                 particle.PSpeed = GetOptionalFloat(arguments, "particleSpeed", 3);
@@ -854,6 +1084,23 @@ namespace CrazyStorm.McpServer
             return new[] { Convert.ToString(value) };
         }
 
+        private int[] GetIntArray(Dictionary<string, object> arguments, string name)
+        {
+            object value;
+            if (!arguments.TryGetValue(name, out value) || value == null) return new int[0];
+
+            var array = value as object[];
+            if (array != null) return array.Select(Convert.ToInt32).ToArray();
+
+            var list = value as IEnumerable<object>;
+            if (list != null) return list.Select(Convert.ToInt32).ToArray();
+
+            var arrayList = value as ArrayList;
+            if (arrayList != null) return arrayList.Cast<object>().Select(Convert.ToInt32).ToArray();
+
+            return new[] { Convert.ToInt32(value) };
+        }
+
         private LoadedProject LoadProject(string path)
         {
             string fullPath = ResolvePath(path);
@@ -1126,6 +1373,20 @@ namespace CrazyStorm.McpServer
                 { "items", new Dictionary<string, object>
                     {
                         { "type", "string" }
+                    }
+                }
+            };
+        }
+
+        private static Dictionary<string, object> NumberArrayProperty(string description)
+        {
+            return new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", description },
+                { "items", new Dictionary<string, object>
+                    {
+                        { "type", "number" }
                     }
                 }
             };

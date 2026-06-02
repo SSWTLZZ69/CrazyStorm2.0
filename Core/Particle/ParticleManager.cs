@@ -130,6 +130,13 @@ namespace CrazyStorm.Core
                 return count;
             }
         }
+        public static List<ParticleBase> GetActiveParticles(ParticleSystem system)
+        {
+            if (activeParticles == null || system == null || !activeParticles.ContainsKey(system))
+                return new List<ParticleBase>();
+
+            return new List<ParticleBase>(activeParticles[system]);
+        }
         public static Vector2[] MaskPositionArray => maskPositionArray;
         public static Vector2[] MaskSizeArray => maskSizeArray;
         public static float[] MaskShapeArray => maskShapeArray;

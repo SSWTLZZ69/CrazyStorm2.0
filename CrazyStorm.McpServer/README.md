@@ -52,6 +52,7 @@ Use the built executable as a stdio MCP server:
 - `crazy_storm_validate_project`: validates loadability and can compile play data in memory with `compile=true`.
 - `crazy_storm_export_play_data`: exports playable `.bg` data. Existing output files require `overwrite=true`.
 - `crazy_storm_component_types`: lists component types available from `CrazyStorm.Core`.
+- `crazy_storm_debug_frames`: replays the project to selected frames and returns active particle counts, bounds, speed/opacity averages, optional player collision counts, and sample bullet data.
 
 ### Project editing
 
@@ -77,6 +78,7 @@ crazy_storm_create_project(path="pattern.bgp")
 crazy_storm_add_multi_emitter(path="pattern.bgp", name="BlueBurst", emitCount=16, emitCycle=8)
 crazy_storm_set_property(path="pattern.bgp", component="BlueBurst", target="particle", property="RGB", value={ "r": 80, "g": 180, "b": 255 })
 crazy_storm_validate_project(path="pattern.bgp", compile=true)
+crazy_storm_debug_frames(path="pattern.bgp", frames=[60, 120, 180], maxSamples=20)
 crazy_storm_export_play_data(path="pattern.bgp", outputPath="pattern.bg")
 crazy_storm_open_editor(path="pattern.bgp")
 crazy_storm_ping_running_editor()
@@ -84,6 +86,11 @@ crazy_storm_add_multi_emitter(path="pattern.bgp", name="PinkRing", emitCount=24,
 ```
 
 `crazy_storm_add_event_group` expects event strings in the current CS2 serialized event format. Use validation with `compile=true` after adding events.
+
+`crazy_storm_debug_frames` is a headless runtime sampler, not a renderer. It uses
+CrazyStorm.Core playback logic to skip to requested frames and inspect active
+particles. Use it for density, bounds, timing, and collision debugging; use the
+editor window for visual rendering.
 
 ## User-facing commands
 
