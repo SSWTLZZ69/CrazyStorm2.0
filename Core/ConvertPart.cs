@@ -193,13 +193,14 @@ namespace CrazyStorm.Core
             {
                 //header
                 reader.ReadLine();
-                match = RenderingOrderMatch.Match(reader.ReadLine());
+                line = reader.ReadLine()?.Trim();
+                match = RenderingOrderMatch.Match(line ?? string.Empty);
                 //particleSystem
                 var particleSystem = new ParticleSystem(this, Path.GetFileNameWithoutExtension(filePath));
                 if (match.Success)
                 {
                     particleSystem.OrderType = (OrderType)int.Parse(match.Groups[1].Value);
-                    line = reader.ReadLine().Trim();
+                    line = reader.ReadLine()?.Trim();
                 }
                 if (line == "External:")
                 {
