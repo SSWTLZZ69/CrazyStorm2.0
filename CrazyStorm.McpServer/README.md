@@ -26,7 +26,31 @@ Use the built executable as a stdio MCP server:
 
 ## Tools
 
+### Inspection and export
+
 - `crazy_storm_project_summary`: loads a `.bgp` or legacy `.mbg` project and returns project counts plus invalid resources.
 - `crazy_storm_validate_project`: validates loadability and can compile play data in memory with `compile=true`.
 - `crazy_storm_export_play_data`: exports playable `.bg` data. Existing output files require `overwrite=true`.
 - `crazy_storm_component_types`: lists component types available from `CrazyStorm.Core`.
+
+### Project editing
+
+- `crazy_storm_create_project`: creates a `.bgp` project with one particle system, one layer, and an optional default `Center`.
+- `crazy_storm_add_layer`: adds a layer to a `.bgp` project.
+- `crazy_storm_add_multi_emitter`: adds a `MultiEmitter` and configures common emitter and particle-template parameters.
+- `crazy_storm_set_property`: sets a component or particle-template property by name. It supports runtime values and expression-backed properties.
+- `crazy_storm_add_event_group`: adds raw CS2 event-group text to a component or emitter particle template.
+
+Editing tools load a project, modify it through `CrazyStorm.Core`, save it, then return a fresh summary. Legacy `.mbg` inputs require `outputPath` so the original CS1 text file is not overwritten by CS2 XML.
+
+Example flow:
+
+```text
+crazy_storm_create_project(path="pattern.bgp")
+crazy_storm_add_multi_emitter(path="pattern.bgp", name="BlueBurst", emitCount=16, emitCycle=8)
+crazy_storm_set_property(path="pattern.bgp", component="BlueBurst", target="particle", property="RGB", value={ "r": 80, "g": 180, "b": 255 })
+crazy_storm_validate_project(path="pattern.bgp", compile=true)
+crazy_storm_export_play_data(path="pattern.bgp", outputPath="pattern.bg")
+```
+
+`crazy_storm_add_event_group` expects event strings in the current CS2 serialized event format. Use validation with `compile=true` after adding events.
